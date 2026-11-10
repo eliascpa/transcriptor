@@ -1,0 +1,23 @@
+# Entorno
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Nunca subir audios, videos ni transcripciones (pueden ser confidenciales)
+*.mp3
+*.m4a
+*.wav
+*.aac
+*.flac
+*.ogg
+*.opus
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.srt
+*.vtt
+transcripciones/
+salidas/
+output/
