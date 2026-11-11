@@ -43,7 +43,10 @@ def ensure_models() -> None:
         tmp = MODELS_DIR / "seg.tar.bz2"
         urllib.request.urlretrieve(SEG_URL, tmp)
         with tarfile.open(tmp) as tf:
-            tf.extractall(MODELS_DIR, filter="data")
+            try:
+                tf.extractall(MODELS_DIR, filter="data")
+            except TypeError:  # Python < 3.12 sin el parámetro filter
+                tf.extractall(MODELS_DIR)
         tmp.unlink()
     if not EMB_MODEL.exists():
         tmp = EMB_MODEL.with_suffix(".part")

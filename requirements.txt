@@ -1,4 +1,11 @@
-mlx-whisper>=0.4.3
+# Motor según el equipo (pip elige solo):
+# - Mac con Apple Silicon → MLX
+# - Windows / Linux / Mac Intel → faster-whisper
+mlx-whisper>=0.4.3; sys_platform == "darwin" and platform_machine == "arm64"
+faster-whisper>=1.1; sys_platform != "darwin" or platform_machine != "arm64"
+# PyAV 19 eliminó el parámetro metadata_errors que usa faster-whisper 1.2.1
+av>=12,<19; sys_platform != "darwin" or platform_machine != "arm64"
+
 gradio>=6.0
 python-docx>=1.2
 sherpa-onnx>=2.0

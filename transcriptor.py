@@ -1,32 +1,49 @@
-"""Núcleo de transcripción: Whisper (MLX) local para español e inglés,
-con separación opcional de hablantes."""
+"""Núcleo de transcripción local para español e inglés, con separación
+opcional de hablantes.
+
+Motor según el equipo:
+- Mac con Apple Silicon → MLX (motor_mlx.py)
+- Windows / Linux / Mac Intel → faster-whisper (motor_faster.py)
+Se puede forzar con TRANSCRIPTOR_MOTOR=mlx o =faster.
+"""
 
 from __future__ import annotations
 
-import contextlib
-import importlib
 import json
-import subprocess
-import tempfile
-import types
+import os
+import platform
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-import mlx.core as mx
-import mlx_whisper
-import numpy as np
-import tqdm
-from mlx_whisper.audio import N_SAMPLES, load_audio, log_mel_spectrogram, pad_or_trim
-from mlx_whisper.decoding import detect_language
-from mlx_whisper.transcribe import ModelHolder
 
-# El paquete reexporta la función `transcribe`, que oculta al módulo del mismo
-# nombre; import_module devuelve el módulo real.
-_mw_transcribe = importlib.import_module("mlx_whisper.transcribe")
+def _pick_motor():
+    forced = os.environ.get("TRANSCRIPTOR_MOTOR", "").lower()
+    apple = sys.platform == "darwin" and platform.machine() == "arm64"
+    if forced == "faster" or (not forced and not apple):
+        import motor_faster as m
+        return m
+    try:
+        import motor_mlx as m
+    except ImportError:
+        if forced == "mlx":
+            raise
+        import motor_faster as m
+    return m
 
-DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
+
+motor = _pick_motor()
+
 LANGUAGES = {"Automático": None, "Español": "es", "Inglés": "en"}
+QUALITIES = {
+    "Máxima precisión (large-v3-turbo)": "preciso",
+    "Equilibrado (medium)": "equilibrado",
+    "Rápido (small)": "rapido",
+}
+DEFAULT_QUALITY = "preciso"
+SAMPLE_RATE = 16000
+WINDOW = 30 * SAMPLE_RATE  # 30 s, la ventana de Whisper
 
 # on_progress(fracción 0..1, mensaje)
 ProgressFn = Callable[[float, str], None]
@@ -60,57 +77,19 @@ def speaker_label(spk: int | None, names: Names | None = None) -> str:
     return name or f"Hablante {spk}"
 
 
-# ---------- Audio y modelo ----------
-
-def _to_wav(src: Path, dst: Path) -> None:
-    """Convierte cualquier audio/video a WAV 16 kHz mono con ffmpeg."""
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(dst)],
-        check=True,
-        capture_output=True,
-    )
-
-
-def detect_es_en(audio: mx.array, model: str) -> str:
+def detect_es_en(audio, model: str) -> str:
     """Decide entre 'es' y 'en' promediando hasta 3 ventanas de 30 s.
 
     Restringir la detección a los dos idiomas de interés evita errores de la
     autodetección general de Whisper (p. ej. confundir español con otro idioma).
     """
-    m = ModelHolder.get_model(model, mx.float16)
-    last = max(len(audio) - N_SAMPLES, 0)
-    starts = sorted({0, last // 2, last})
+    last = max(len(audio) - WINDOW, 0)
     es = en = 0.0
-    for st in starts:
-        chunk = audio[st : st + N_SAMPLES]
-        mel = log_mel_spectrogram(pad_or_trim(chunk, N_SAMPLES), n_mels=m.dims.n_mels)
-        _, probs = detect_language(m, mel[None])
-        es += probs[0].get("es", 0.0)
-        en += probs[0].get("en", 0.0)
+    for st in sorted({0, last // 2, last}):
+        probs = motor.language_probs(audio[st : st + WINDOW], model)
+        es += probs.get("es", 0.0)
+        en += probs.get("en", 0.0)
     return "es" if es >= en else "en"
-
-
-@contextlib.contextmanager
-def _track_whisper(cb: ProgressFn, lo: float, hi: float):
-    """Redirige la barra tqdm interna de mlx_whisper a `cb`, en el rango [lo, hi].
-
-    Solo sustituye la referencia dentro del módulo de mlx_whisper, no tqdm global.
-    """
-
-    class _Bar(tqdm.tqdm):
-        def update(self, n=1):
-            r = super().update(n)
-            if self.total:
-                f = min(self.n / self.total, 1.0)
-                cb(lo + (hi - lo) * f, f"Transcribiendo… {f:.0%}")
-            return r
-
-    original = _mw_transcribe.tqdm
-    _mw_transcribe.tqdm = types.SimpleNamespace(tqdm=_Bar)
-    try:
-        yield
-    finally:
-        _mw_transcribe.tqdm = original
 
 
 # ---------- Asignación de hablantes ----------
@@ -160,7 +139,7 @@ def _assign_speakers(whisper_segments: list[dict], turns) -> list[Segment]:
 def transcribe(
     path: str | Path,
     language: str | None = None,
-    model: str = DEFAULT_MODEL,
+    quality: str = DEFAULT_QUALITY,
     prompt: str | None = None,
     on_progress: ProgressFn | None = None,
     speakers: bool = False,
@@ -168,45 +147,42 @@ def transcribe(
 ) -> Result:
     """Transcribe un archivo. language: 'es', 'en' o None (autodetectar).
 
+    quality: 'preciso', 'equilibrado' o 'rapido' (tamaño del modelo).
     prompt: vocabulario/nombres propios para mejorar la precisión.
     on_progress: callback opcional (fracción 0..1, mensaje) para mostrar avance.
     speakers: separar hablantes (Hablante 1, 2, 3…).
     num_speakers: número de hablantes si se conoce (mejora la separación).
     """
     cb = on_progress or (lambda f, msg: None)
-    whisper_hi = 0.75 if speakers else 0.99
-    with tempfile.TemporaryDirectory() as tmp:
-        wav = Path(tmp) / "audio.wav"
-        cb(0.0, "Convirtiendo audio…")
-        _to_wav(Path(path), wav)
-        audio = load_audio(str(wav))
-        cb(0.03, "Cargando modelo…")
-        ModelHolder.get_model(model, mx.float16)  # descarga/carga una sola vez
-        if language is None:
-            cb(0.06, "Detectando idioma…")
-            language = detect_es_en(audio, model)
-        cb(0.10, "Transcribiendo… 0%")
-        with _track_whisper(cb, 0.10, whisper_hi):
-            out = mlx_whisper.transcribe(
-                audio,
-                path_or_hf_repo=model,
-                language=language,
-                initial_prompt=prompt or None,
-                condition_on_previous_text=False,  # reduce alucinaciones/repeticiones
-                word_timestamps=speakers,  # necesario para cortar por hablante
-                verbose=False,  # activa la barra interna que redirigimos
-            )
+    model = motor.MODELS[quality]
+    hi = 0.75 if speakers else 0.99
+
+    cb(0.0, "Leyendo audio…")
+    audio = motor.load_audio(str(path))
+    cb(0.03, "Cargando modelo…")
+    motor.load_model(model)  # descarga/carga una sola vez
+    if language is None:
+        cb(0.06, "Detectando idioma…")
+        language = detect_es_en(audio, model)
+    cb(0.10, "Transcribiendo…")
+    out = motor.transcribe(
+        audio,
+        language,
+        model,
+        prompt,
+        words=speakers,  # marcas por palabra: necesarias para cortar por hablante
+        cb=lambda f: cb(0.10 + (hi - 0.10) * f, "Transcribiendo…"),
+    )
 
     if speakers:
         import diarizacion
 
-        cb(whisper_hi, "Identificando hablantes… 0%")
+        cb(hi, "Identificando hablantes…")
         turns = diarizacion.diarize(
-            np.array(audio),
+            audio,
             num_speakers,
             on_progress=lambda f: cb(
-                whisper_hi + (0.99 - whisper_hi) * f,
-                f"Identificando hablantes… {f:.0%}",
+                hi + (0.99 - hi) * f, "Identificando hablantes…"
             ),
         )
         segments = _assign_speakers(out["segments"], turns)
@@ -215,7 +191,7 @@ def transcribe(
             Segment(s["start"], s["end"], s["text"].strip()) for s in out["segments"]
         ]
     cb(1.0, "Listo")
-    return Result(out["language"], out["text"].strip(), segments)
+    return Result(out["language"], out["text"], segments)
 
 
 # ---------- Exportación ----------

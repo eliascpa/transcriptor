@@ -5,6 +5,7 @@ import tempfile
 
 import gradio as gr
 
+import estilo
 import transcriptor as tr
 
 OUT_DIR = Path(tempfile.mkdtemp(prefix="transcriptor_"))
@@ -42,7 +43,7 @@ def _render(res: tr.Result, stem: str, con_tiempos: bool, names: tr.Names):
     return tr.to_txt(res, con_tiempos, names), files
 
 
-def run(audio, idioma, vocab, con_tiempos, hablantes, num_hablantes,
+def run(audio, idioma, calidad, vocab, con_tiempos, hablantes, num_hablantes,
         progress=gr.Progress()):
     if audio is None:
         raise gr.Error("Sube un archivo de audio o video.")
@@ -50,6 +51,7 @@ def run(audio, idioma, vocab, con_tiempos, hablantes, num_hablantes,
     res = tr.transcribe(
         audio,
         tr.LANGUAGES[idioma],
+        quality=tr.QUALITIES[calidad],
         prompt=vocab,
         on_progress=lambda f, msg: progress(f, desc=msg),
         speakers=hablantes,
@@ -61,14 +63,14 @@ def run(audio, idioma, vocab, con_tiempos, hablantes, num_hablantes,
 
     firsts = tr.first_lines(res)
     table = [[f"Hablante {s}", "", firsts.get(s, "")] for s in res.speakers]
-    hay = bool(table)
+    idioma_txt = {"es": "Español", "en": "Inglés"}.get(res.language, res.language)
     return (
         texto,
-        res.language,
+        idioma_txt,
         files,
         {"res": res, "stem": stem},
-        gr.update(value=table or None, visible=hay),
-        gr.update(visible=hay),
+        table or None,
+        gr.update(visible=bool(table)),
     )
 
 
@@ -79,54 +81,97 @@ def aplicar_nombres(estado, tabla, con_tiempos):
     return _render(estado["res"], estado["stem"], con_tiempos, names)
 
 
-with gr.Blocks(title="Transcriptor") as demo:
-    gr.Markdown("# Transcriptor\nAudio a texto, 100% local (Whisper + MLX).")
+with gr.Blocks(title="Transcriptor | Fernández CPA & Law") as demo:
     estado = gr.State(None)
-    with gr.Row():
-        with gr.Column():
+
+    gr.HTML(estilo.notice(), padding=False, container=False)
+    gr.HTML(estilo.hero(tr.motor.describe()), padding=False, container=False)
+
+    with gr.Row(equal_height=False):
+        # --- Tarjeta 1: audio y opciones ---
+        with gr.Column(scale=5, elem_classes="tc-card"):
+            gr.HTML(
+                estilo.card_head("upload", 1, "Audio y opciones",
+                                 "Sube el archivo y ajusta la transcripción."),
+                padding=False,
+            )
             audio = gr.File(
                 label="Audio o video",
                 file_types=["audio", "video"],
                 type="filepath",
+                elem_classes="tc-keep",
             )
             idioma = gr.Radio(list(tr.LANGUAGES), value="Automático", label="Idioma")
+            calidad = gr.Dropdown(
+                list(tr.QUALITIES),
+                value=next(k for k, v in tr.QUALITIES.items() if v == tr.DEFAULT_QUALITY),
+                label="Modelo",
+                info="En equipos sin tarjeta gráfica, «Equilibrado» o «Rápido» tardan menos.",
+            )
             vocab = gr.Textbox(
                 label="Vocabulario (opcional)",
                 placeholder="Nombres propios, términos técnicos…",
             )
             with gr.Row():
                 hablantes = gr.Checkbox(value=True, label="Identificar hablantes")
-                num_hablantes = gr.Number(
-                    value=0,
-                    precision=0,
-                    minimum=0,
-                    maximum=20,
-                    label="Número de hablantes (0 = automático)",
-                )
-            tiempos = gr.Checkbox(value=True, label="Incluir marcas de tiempo")
-            btn = gr.Button("Transcribir", variant="primary")
-
-            tabla = gr.Dataframe(
-                headers=TABLE_HEADERS,
-                datatype=["str", "str", "str"],
-                interactive=True,
-                static_columns=[0, 2],
-                wrap=True,
-                label="Nombres de los hablantes (escribe en la columna «Nombre»)",
-                visible=False,
+                tiempos = gr.Checkbox(value=True, label="Incluir marcas de tiempo")
+            num_hablantes = gr.Number(
+                value=0,
+                precision=0,
+                minimum=0,
+                maximum=20,
+                label="Número de hablantes (0 = automático)",
             )
-            btn_nombres = gr.Button("Aplicar nombres", visible=False)
-        with gr.Column():
-            texto = gr.Textbox(label="Transcripción", lines=22, buttons=["copy"])
-            detectado = gr.Textbox(label="Idioma detectado")
-            descargas = gr.File(label="Descargas", file_count="multiple")
+            btn = gr.Button("Transcribir", variant="primary", size="lg",
+                            elem_classes="tc-primary")
+
+        # --- Tarjeta 2: resultado ---
+        with gr.Column(scale=7, elem_classes="tc-card"):
+            gr.HTML(
+                estilo.card_head("text", 2, "Transcripción",
+                                 "Revisa el texto y descarga los archivos."),
+                padding=False,
+            )
+            texto = gr.Textbox(label="Texto", lines=20, buttons=["copy"])
+            with gr.Row():
+                detectado = gr.Textbox(label="Idioma detectado", scale=1)
+            descargas = gr.File(
+                label="Descargas (TXT · SRT · VTT · JSON · DOCX)",
+                file_count="multiple",
+                elem_classes="tc-keep",
+            )
+
+    # --- Tarjeta 3: nombres de los hablantes (aparece al terminar) ---
+    with gr.Column(visible=False, elem_classes="tc-card") as panel_nombres:
+        gr.HTML(
+            estilo.card_head("users", 3, "Nombres de los hablantes",
+                             "Escribe el nombre de cada persona en la columna «Nombre» "
+                             "y pulsa «Aplicar nombres»."),
+            padding=False,
+        )
+        tabla = gr.Dataframe(
+            headers=TABLE_HEADERS,
+            datatype=["str", "str", "str"],
+            interactive=True,
+            static_columns=[0, 2],
+            column_widths=["16%", "30%", "54%"],
+            wrap=True,
+            show_label=False,
+            elem_classes="tc-keep",
+        )
+        btn_nombres = gr.Button("Aplicar nombres", variant="primary",
+                                elem_classes="tc-primary")
 
     btn.click(
         run,
-        [audio, idioma, vocab, tiempos, hablantes, num_hablantes],
-        [texto, detectado, descargas, estado, tabla, btn_nombres],
+        [audio, idioma, calidad, vocab, tiempos, hablantes, num_hablantes],
+        [texto, detectado, descargas, estado, tabla, panel_nombres],
+        show_progress_on=[texto],  # una sola barra, sobre el texto
     )
     btn_nombres.click(aplicar_nombres, [estado, tabla, tiempos], [texto, descargas])
 
+# Apariencia (en Gradio 6 el tema y el CSS se pasan a launch)
+LAUNCH_STYLE = dict(theme=estilo.THEME, css=estilo.CSS, head=estilo.HEAD)
+
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1")
+    demo.launch(server_name="127.0.0.1", inbrowser=True, **LAUNCH_STYLE)
