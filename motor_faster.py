@@ -37,6 +37,7 @@ import ctranslate2  # noqa: E402
 from faster_whisper import WhisperModel, decode_audio  # noqa: E402
 
 MODELS = {
+    "maximo": "large-v3",
     "preciso": "large-v3-turbo",
     "equilibrado": "medium",
     "rapido": "small",

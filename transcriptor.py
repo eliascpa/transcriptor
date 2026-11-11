@@ -37,7 +37,8 @@ motor = _pick_motor()
 
 LANGUAGES = {"Automático": None, "Español": "es", "Inglés": "en"}
 QUALITIES = {
-    "Máxima precisión (large-v3-turbo)": "preciso",
+    "Alta precisión (large-v3-turbo) · recomendado": "preciso",
+    "Máxima precisión (large-v3) · más lento": "maximo",
     "Equilibrado (medium)": "equilibrado",
     "Rápido (small)": "rapido",
 }

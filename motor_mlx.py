@@ -22,6 +22,7 @@ _mw_transcribe = importlib.import_module("mlx_whisper.transcribe")
 
 NAME = "MLX · GPU Apple Silicon"
 MODELS = {
+    "maximo": "mlx-community/whisper-large-v3-mlx",
     "preciso": "mlx-community/whisper-large-v3-turbo",
     "equilibrado": "mlx-community/whisper-medium-mlx",
     "rapido": "mlx-community/whisper-small-mlx",

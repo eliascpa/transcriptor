@@ -18,7 +18,18 @@ Transcriptor local de audio a texto en español e inglés, con Whisper. Funciona
 \* Medido en un procesador de 8 núcleos; varía según el equipo.
 
 La aplicación elige el motor sola. La primera transcripción descarga el modelo
-(~1.6 GB con «Máxima precisión»).
+(~1.6 GB con el modelo recomendado).
+
+### Modelos
+
+| Modelo | Tamaño | Cuándo usarlo |
+|---|---|---|
+| **Alta precisión** (large-v3-turbo) · recomendado | ~1.6 GB | Uso general |
+| **Máxima precisión** (large-v3) | ~3 GB | Audio con ruido o acentos difíciles; tarda el doble |
+| **Equilibrado** (medium) | ~1.5 GB | Equipos sin tarjeta gráfica |
+| **Rápido** (small) | ~0.5 GB | Borradores rápidos |
+
+Todos se ejecutan en el equipo; ninguno envía el audio a internet.
 
 ---
 
